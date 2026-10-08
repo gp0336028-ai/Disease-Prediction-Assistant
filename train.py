@@ -1,71 +1,77 @@
 import os
-import joblib
 import pandas as pd
-import numpy as np
+import joblib
 
 from sklearn.model_selection import train_test_split
-from sklearn.impute import SimpleImputer
+from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    classification_report
+)
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
 from xgboost import XGBClassifier
 
-import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-
-
-# ============================================
-# CREATE MODELS FOLDER
-# ============================================
-
+# Create models folder if it does not exist
 os.makedirs("models", exist_ok=True)
 
+# Load new dataset
+df = pd.read_csv("dataset/diabetes_prediction_dataset.csv")
 
-# ============================================
-# LOAD DATASET
-# ============================================
+print("Original dataset shape:", df.shape)
 
-data = pd.read_csv("dataset/diabetes.csv")
+# Remove duplicate records
+df = df.drop_duplicates().copy()
 
-print("Dataset loaded successfully!")
-print("Shape:", data.shape)
+print("Dataset shape after removing duplicates:", df.shape)
+print("\nGender counts:")
+print(df["gender"].value_counts())
 
+# Separate input features and target
+X = df.drop("diabetes", axis=1)
+y = df["diabetes"]
 
-# ============================================
-# SEPARATE FEATURES AND TARGET
-# ============================================
-
-X = data.drop("Outcome", axis=1)
-y = data["Outcome"]
-
-print("\nFeatures shape:", X.shape)
-print("Target shape:", y.shape)
-
-
-# ============================================
-# REPLACE INVALID ZERO VALUES
-# ============================================
-
-columns_with_zero_as_missing = [
-    "Glucose",
-    "BloodPressure",
-    "SkinThickness",
-    "Insulin",
-    "BMI"
+# Define columns
+numeric_features = [
+    "age",
+    "hypertension",
+    "heart_disease",
+    "bmi",
+    "HbA1c_level",
+    "blood_glucose_level"
 ]
 
-X[columns_with_zero_as_missing] = X[
-    columns_with_zero_as_missing
-].replace(0, np.nan)
+categorical_features = [
+    "gender",
+    "smoking_history"
+]
 
+# Preprocessing for numeric data
+numeric_transformer = Pipeline(steps=[
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler", StandardScaler())
+])
 
-# ============================================
-# TRAIN-TEST SPLIT
-# ============================================
+# Preprocessing for categorical data
+categorical_transformer = Pipeline(steps=[
+    ("imputer", SimpleImputer(strategy="most_frequent")),
+    ("encoder", OneHotEncoder(handle_unknown="ignore"))
+])
 
+# Combine preprocessing
+preprocessor = ColumnTransformer(transformers=[
+    ("num", numeric_transformer, numeric_features),
+    ("cat", categorical_transformer, categorical_features)
+])
+
+# Split dataset into training and testing data
 X_train, X_test, y_train, y_test = train_test_split(
     X,
     y,
@@ -74,306 +80,102 @@ X_train, X_test, y_train, y_test = train_test_split(
     stratify=y
 )
 
-print("\nTrain-Test Split:")
-print("X_train:", X_train.shape)
-print("X_test :", X_test.shape)
-print("y_train:", y_train.shape)
-print("y_test :", y_test.shape)
-
-
-# ============================================
-# PREPROCESSING PIPELINE
-# ============================================
-
-preprocessor = Pipeline(
-    steps=[
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler())
-    ]
-)
-
-
-# ============================================
-# FIT PREPROCESSOR
-# ============================================
-
+# Transform training and testing data
 X_train_processed = preprocessor.fit_transform(X_train)
-
 X_test_processed = preprocessor.transform(X_test)
 
+# Calculate imbalance ratio for XGBoost
+negative_count = (y_train == 0).sum()
+positive_count = (y_train == 1).sum()
+scale_pos_weight = negative_count / positive_count
 
-# ============================================
-# SAVE PREPROCESSOR
-# ============================================
+# Define models
+models = {
+    "Logistic Regression": LogisticRegression(
+        max_iter=1000,
+        class_weight="balanced",
+        random_state=42
+    ),
 
-joblib.dump(
-    preprocessor,
-    "models/preprocessor.joblib"
-)
+    "Random Forest": RandomForestClassifier(
+        n_estimators=200,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1
+    ),
 
-print("\nPreprocessor saved successfully!")
-
-
-print("\nPreprocessing completed successfully!")
-print(
-    "Processed training data shape:",
-    X_train_processed.shape
-)
-print(
-    "Processed testing data shape:",
-    X_test_processed.shape
-)
-
-
-# ============================================
-# LOGISTIC REGRESSION
-# ============================================
-
-logistic_model = LogisticRegression(
-    max_iter=1000,
-    random_state=42
-)
-
-logistic_model.fit(
-    X_train_processed,
-    y_train
-)
-
-y_pred = logistic_model.predict(
-    X_test_processed
-)
-
-accuracy = accuracy_score(
-    y_test,
-    y_pred
-)
-
-print("\n" + "=" * 50)
-print("LOGISTIC REGRESSION RESULTS")
-print("=" * 50)
-
-print(f"Accuracy: {accuracy * 100:.2f}%")
-
-print("\nClassification Report:")
-print(
-    classification_report(
-        y_test,
-        y_pred
+    "XGBoost": XGBClassifier(
+        n_estimators=200,
+        learning_rate=0.05,
+        max_depth=5,
+        random_state=42,
+        eval_metric="logloss",
+        scale_pos_weight=scale_pos_weight,
+        n_jobs=-1
     )
-)
-
-
-# ============================================
-# RANDOM FOREST
-# ============================================
-
-random_forest_model = RandomForestClassifier(
-    n_estimators=200,
-    random_state=42
-)
-
-random_forest_model.fit(
-    X_train_processed,
-    y_train
-)
-
-rf_pred = random_forest_model.predict(
-    X_test_processed
-)
-
-rf_accuracy = accuracy_score(
-    y_test,
-    rf_pred
-)
-
-print("\n" + "=" * 50)
-print("RANDOM FOREST RESULTS")
-print("=" * 50)
-
-print(f"Accuracy: {rf_accuracy * 100:.2f}%")
-
-print("\nClassification Report:")
-print(
-    classification_report(
-        y_test,
-        rf_pred
-    )
-)
-
-
-# ============================================
-# XGBOOST
-# ============================================
-
-xgb_model = XGBClassifier(
-    n_estimators=200,
-    learning_rate=0.05,
-    max_depth=4,
-    random_state=42,
-    eval_metric="logloss"
-)
-
-xgb_model.fit(
-    X_train_processed,
-    y_train
-)
-
-xgb_pred = xgb_model.predict(
-    X_test_processed
-)
-
-xgb_accuracy = accuracy_score(
-    y_test,
-    xgb_pred
-)
-
-print("\n" + "=" * 50)
-print("XGBOOST RESULTS")
-print("=" * 50)
-
-print(f"Accuracy: {xgb_accuracy * 100:.2f}%")
-
-print("\nClassification Report:")
-print(
-    classification_report(
-        y_test,
-        xgb_pred
-    )
-)
-
-
-# ============================================
-# SAVE XGBOOST MODEL
-# ============================================
-
-joblib.dump(
-    xgb_model,
-    "models/xgboost_model.joblib"
-)
-
-print("\n" + "=" * 50)
-print("MODEL SAVED SUCCESSFULLY")
-print("=" * 50)
-
-print(
-    "Saved at: models/xgboost_model.joblib"
-)
-
-
-# ============================================
-# MODEL COMPARISON
-# ============================================
-
-print("\n" + "=" * 50)
-print("MODEL COMPARISON")
-print("=" * 50)
-
-print(
-    f"Logistic Regression : "
-    f"{accuracy * 100:.2f}%"
-)
-
-print(
-    f"Random Forest       : "
-    f"{rf_accuracy * 100:.2f}%"
-)
-
-print(
-    f"XGBoost             : "
-    f"{xgb_accuracy * 100:.2f}%"
-)
-
-
-models_accuracy = {
-    "Logistic Regression": accuracy,
-    "Random Forest": rf_accuracy,
-    "XGBoost": xgb_accuracy
 }
 
-best_model_name = max(
-    models_accuracy,
-    key=models_accuracy.get
-)
+results = []
+trained_models = {}
 
-print(
-    f"\nBest Model: {best_model_name}"
-)
+# Train and evaluate models
+for name, model in models.items():
 
-print(
-    f"Best Accuracy: "
-    f"{models_accuracy[best_model_name] * 100:.2f}%"
-)
+    print(f"\nTraining {name}...")
 
+    model.fit(X_train_processed, y_train)
 
-# ============================================
-# XGBOOST CONFUSION MATRIX
-# ============================================
+    predictions = model.predict(X_test_processed)
+    probabilities = model.predict_proba(X_test_processed)[:, 1]
 
-cm = confusion_matrix(
-    y_test,
-    xgb_pred
-)
+    accuracy = accuracy_score(y_test, predictions)
+    precision = precision_score(
+        y_test, predictions, zero_division=0
+    )
+    recall = recall_score(
+        y_test, predictions, zero_division=0
+    )
+    f1 = f1_score(
+        y_test, predictions, zero_division=0
+    )
+    roc_auc = roc_auc_score(y_test, probabilities)
 
-display = ConfusionMatrixDisplay(
-    confusion_matrix=cm,
-    display_labels=[
-        "No Diabetes",
-        "Diabetes"
-    ]
-)
+    results.append({
+        "Model": name,
+        "Accuracy": accuracy,
+        "Precision": precision,
+        "Recall": recall,
+        "F1 Score": f1,
+        "ROC-AUC": roc_auc
+    })
 
-display.plot()
+    trained_models[name] = model
 
-plt.title(
-    "XGBoost Confusion Matrix"
-)
+    print(f"Accuracy:  {accuracy:.4f}")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall:    {recall:.4f}")
+    print(f"F1 Score:  {f1:.4f}")
+    print(f"ROC-AUC:   {roc_auc:.4f}")
 
-plt.tight_layout()
+# Compare model results
+results_df = pd.DataFrame(results)
+print("\nMODEL COMPARISON")
+print(results_df.to_string(index=False))
 
-plt.savefig(
-    "models/xgboost_confusion_matrix.png"
-)
+# Select model with highest F1 score
+best_model_name = results_df.loc[
+    results_df["F1 Score"].idxmax(), "Model"
+]
+best_model = trained_models[best_model_name]
 
-plt.close()
+# Save new model and preprocessor separately
+joblib.dump(best_model, "models/diabetes_model_compressed.joblib", compress=3)
+joblib.dump(preprocessor, "models/diabetes_preprocessor.joblib")
 
+print("\nBest model:", best_model_name)
+print("New model saved successfully.")
+print("Preprocessor saved successfully.")
 
-# ============================================
-# XGBOOST FEATURE IMPORTANCE
-# ============================================
-
-feature_names = X.columns
-
-importance = (
-    xgb_model.feature_importances_
-)
-
-plt.figure(figsize=(10, 6))
-
-plt.barh(
-    feature_names,
-    importance
-)
-
-plt.xlabel("Importance")
-plt.ylabel("Features")
-
-plt.title(
-    "XGBoost Feature Importance"
-)
-
-plt.tight_layout()
-
-plt.savefig(
-    "models/xgboost_feature_importance.png"
-)
-
-plt.close()
-
-
-print(
-    "\nEvaluation charts saved successfully!"
-)
-
-print(
-    "\nALL TRAINING STEPS COMPLETED SUCCESSFULLY!"
-)
+print("\nClassification Report:")
+best_predictions = best_model.predict(X_test_processed)
+print(classification_report(y_test, best_predictions, zero_division=0))
